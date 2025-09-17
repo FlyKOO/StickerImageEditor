@@ -14,31 +14,28 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Text
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.unit.toSize
 import kotlin.math.max
 import kotlin.math.min
+import com.example.stickerdemo.ui.theme.StickerImageEditorTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            StickerImageEditorTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     StickerOnImageDemo()
                 }
@@ -57,8 +54,6 @@ fun StickerOnImageDemo() {
 
     // 贴纸原始（未缩放前）像素尺寸
     var stickerSizePx by remember { mutableStateOf(IntSize.Zero) }
-
-    val density = LocalDensity.current
 
     // 贴纸状态：位移（相对容器左上角，单位像素）、缩放、旋转
     var offset by remember { mutableStateOf(Offset.Zero) }

@@ -27,8 +27,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Text
 import androidx.compose.ui.geometry.Offset
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 import com.example.stickerdemo.ui.theme.StickerImageEditorTheme
 
 class MainActivity : ComponentActivity() {
@@ -105,7 +108,11 @@ fun StickerOnImageDemo() {
                         val newRotation = (rotation + rotationChange)
 
                         // 计算新的位移（像素）
-                        val newOffset = offset + pan
+                        val adjustedPan = pan.adjustForTransform(
+                            scale = newScale,
+                            rotation = newRotation
+                        )
+                        val newOffset = offset + adjustedPan
 
                         // 约束位移：保持贴纸“可视矩形”在容器内
                         val clampedOffset = clampOffsetInsideContainer(
@@ -204,3 +211,22 @@ private fun clamp(v: Float, minV: Float, maxV: Float): Float =
 private fun Modifier.background(color: Color) = this.then(
     androidx.compose.ui.draw.drawBehind { drawRect(color) }
 )
+
+private fun Offset.adjustForTransform(scale: Float, rotation: Float): Offset {
+    if (scale == 0f) return this
+
+    val radians = rotation.toRadians()
+    val cosTheta = cos(radians)
+    val sinTheta = sin(radians)
+
+    // 先把 pan 从屏幕坐标转换到贴图的未旋转/未缩放坐标系
+    val rotatedX = x * cosTheta + y * sinTheta
+    val rotatedY = -x * sinTheta + y * cosTheta
+
+    return Offset(
+        x = rotatedX / scale,
+        y = rotatedY / scale
+    )
+}
+
+private fun Float.toRadians(): Float = (this / 180f) * PI.toFloat()

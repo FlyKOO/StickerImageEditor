@@ -6,22 +6,35 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.Card
+import androidx.compose.material3.ElevatedButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -30,20 +43,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.OpenInFull
-import androidx.compose.material.icons.filled.RotateRight
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
@@ -73,31 +79,68 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun StickerEditorScreen() {
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
-    var stickerSize by remember { mutableStateOf(IntSize.Zero) }
+    val stickers = remember { mutableStateListOf<StickerState>() }
+    var selectedStickerId by remember { mutableStateOf<Long?>(null) }
+    var nextStickerId by remember { mutableStateOf(0L) }
 
-    var stickerCenter by remember { mutableStateOf(Offset.Zero) }
-    var scale by remember { mutableStateOf(1f) }
-    var rotation by remember { mutableStateOf(0f) }
-
-    var hasInitialPlacement by remember { mutableStateOf(false) }
-    var isStickerVisible by remember { mutableStateOf(true) }
-
-    LaunchedEffect(containerSize) {
-        if (!hasInitialPlacement && containerSize != IntSize.Zero) {
-            stickerCenter = Offset(
-                x = containerSize.width / 2f,
-                y = containerSize.height / 2f
+    fun addSticker(text: String) {
+        if (containerSize == IntSize.Zero) return
+        val id = nextStickerId
+        stickers.add(
+            StickerState(
+                id = id,
+                text = text,
+                center = Offset(
+                    x = containerSize.width / 2f,
+                    y = containerSize.height / 2f
+                )
             )
-            hasInitialPlacement = true
+        )
+        nextStickerId += 1
+        selectedStickerId = id
+    }
+
+    fun updateSticker(id: Long, transform: (StickerState) -> StickerState) {
+        val index = stickers.indexOfFirst { it.id == id }
+        if (index != -1) {
+            val current = stickers[index]
+            val updated = transform(current)
+            if (updated != current) {
+                stickers[index] = updated
+            }
         }
     }
 
-    Box(
+    LaunchedEffect(containerSize) {
+        if (containerSize != IntSize.Zero && stickers.isEmpty()) {
+            addSticker("可拖拽/缩放/旋转的贴纸")
+        }
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        contentAlignment = Alignment.Center
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            ElevatedButton(
+                onClick = { addSticker("可拖拽/缩放/旋转的贴纸") },
+                enabled = containerSize != IntSize.Zero
+            ) {
+                Text(text = "添加文字贴纸")
+            }
+            ElevatedButton(
+                onClick = { addSticker("新的贴纸 ${stickers.size + 1}") },
+                enabled = containerSize != IntSize.Zero
+            ) {
+                Text(text = "添加新贴纸")
+            }
+        }
+
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -113,91 +156,133 @@ private fun StickerEditorScreen() {
                     modifier = Modifier.fillMaxSize()
                 )
 
-                if (isStickerVisible) {
+                stickers.forEach { sticker ->
+                    val isSelected = sticker.id == selectedStickerId
                     Sticker(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .onGloballyPositioned { stickerSize = it.size }
-                            .graphicsLayer {
-                                translationX = stickerCenter.x - stickerSize.width / 2f
-                                translationY = stickerCenter.y - stickerSize.height / 2f
-                                scaleX = scale
-                                scaleY = scale
-                                rotationZ = rotation
-                                transformOrigin = TransformOrigin(0.5f, 0.5f)
-                            },
-                        text = "可拖拽/缩放/旋转的贴纸",
+                        state = sticker,
+                        isSelected = isSelected,
+                        onSelected = { selectedStickerId = sticker.id },
                         onDrag = { localDelta ->
-                            if (stickerSize == IntSize.Zero || containerSize == IntSize.Zero) return@Sticker
-                            val deltaGlobal = localDelta.rotate(rotation) * scale
-                            val candidateCenter = stickerCenter + deltaGlobal
-                            stickerCenter = clampCenterInsideContainer(
-                                candidate = candidateCenter,
-                                container = containerSize,
-                                stickerSize = stickerSize,
-                                scale = scale,
-                                rotation = rotation
-                            )
+                            if (containerSize == IntSize.Zero) return@Sticker
+                            updateSticker(sticker.id) { current ->
+                                if (current.size == IntSize.Zero) current else {
+                                    val deltaGlobal = localDelta.rotate(current.rotation) * current.scale
+                                    val candidateCenter = current.center + deltaGlobal
+                                    val clamped = clampCenterInsideContainer(
+                                        candidate = candidateCenter,
+                                        container = containerSize,
+                                        stickerSize = current.size,
+                                        scale = current.scale,
+                                        rotation = current.rotation
+                                    )
+                                    current.copy(center = clamped)
+                                }
+                            }
                         },
                         onScaleHandleDrag = { localPointer ->
-                            if (stickerSize == IntSize.Zero || containerSize == IntSize.Zero) return@Sticker
-                            val pointerInContainer = localToContainer(
-                                local = localPointer,
-                                center = stickerCenter,
-                                stickerSize = stickerSize,
-                                scale = scale,
-                                rotation = rotation
-                            )
-                            val baseVector = Offset(
-                                x = -stickerSize.width / 2f,
-                                y = stickerSize.height / 2f
-                            )
-                            val baseLength = baseVector.length()
-                            if (baseLength == 0f) return@Sticker
-                            val desiredVector = pointerInContainer - stickerCenter
-                            val tentativeScale = if (desiredVector == Offset.Zero) scale else desiredVector.length() / baseLength
-                            val targetScale = tentativeScale.coerceIn(MIN_SCALE, MAX_SCALE)
-                            val rotatedBase = baseVector.rotate(rotation)
-                            val desiredScaledVector = rotatedBase * targetScale
-                            val candidateCenter = pointerInContainer - desiredScaledVector
-                            val clampedCenter = clampCenterInsideContainer(
-                                candidate = candidateCenter,
-                                container = containerSize,
-                                stickerSize = stickerSize,
-                                scale = targetScale,
-                                rotation = rotation
-                            )
-                            stickerCenter = clampedCenter
-                            scale = targetScale
+                            if (containerSize == IntSize.Zero) return@Sticker
+                            updateSticker(sticker.id) { current ->
+                                if (current.size == IntSize.Zero) current else {
+                                    val pointerInContainer = localToContainer(
+                                        local = localPointer,
+                                        center = current.center,
+                                        stickerSize = current.size,
+                                        scale = current.scale,
+                                        rotation = current.rotation
+                                    )
+                                    val baseVector = Offset(
+                                        x = -current.size.width / 2f,
+                                        y = current.size.height / 2f
+                                    )
+                                    val baseLength = baseVector.length()
+                                    if (baseLength == 0f) {
+                                        current
+                                    } else {
+                                        val desiredVector = pointerInContainer - current.center
+                                        val tentativeScale = if (desiredVector == Offset.Zero) {
+                                            current.scale
+                                        } else {
+                                            desiredVector.length() / baseLength
+                                        }
+                                        val targetScale = tentativeScale.coerceIn(MIN_SCALE, MAX_SCALE)
+                                        val rotatedBase = baseVector.rotate(current.rotation)
+                                        val desiredScaledVector = rotatedBase * targetScale
+                                        val candidateCenter = pointerInContainer - desiredScaledVector
+                                        val clampedCenter = clampCenterInsideContainer(
+                                            candidate = candidateCenter,
+                                            container = containerSize,
+                                            stickerSize = current.size,
+                                            scale = targetScale,
+                                            rotation = current.rotation
+                                        )
+                                        current.copy(center = clampedCenter, scale = targetScale)
+                                    }
+                                }
+                            }
                         },
                         onRotateHandleDrag = { localPointer ->
-                            if (stickerSize == IntSize.Zero || containerSize == IntSize.Zero) return@Sticker
-                            val pointerInContainer = localToContainer(
-                                local = localPointer,
-                                center = stickerCenter,
-                                stickerSize = stickerSize,
-                                scale = scale,
-                                rotation = rotation
-                            )
-                            val pointerVector = pointerInContainer - stickerCenter
-                            if (pointerVector == Offset.Zero) return@Sticker
-                            val baseVector = Offset(
-                                x = stickerSize.width / 2f,
-                                y = stickerSize.height / 2f
-                            )
-                            val baseAngle = baseVector.angleDegrees()
-                            val pointerAngle = pointerVector.angleDegrees()
-                            val newRotation = normalizeAngle(pointerAngle - baseAngle)
-                            rotation = newRotation
-                            stickerCenter = clampCenterInsideContainer(
-                                candidate = stickerCenter,
-                                container = containerSize,
-                                stickerSize = stickerSize,
-                                scale = scale,
-                                rotation = newRotation
-                            )
+                            if (containerSize == IntSize.Zero) return@Sticker
+                            updateSticker(sticker.id) { current ->
+                                if (current.size == IntSize.Zero) current else {
+                                    val pointerInContainer = localToContainer(
+                                        local = localPointer,
+                                        center = current.center,
+                                        stickerSize = current.size,
+                                        scale = current.scale,
+                                        rotation = current.rotation
+                                    )
+                                    val pointerVector = pointerInContainer - current.center
+                                    if (pointerVector == Offset.Zero) {
+                                        current
+                                    } else {
+                                        val baseVector = Offset(
+                                            x = current.size.width / 2f,
+                                            y = current.size.height / 2f
+                                        )
+                                        val baseAngle = baseVector.angleDegrees()
+                                        val pointerAngle = pointerVector.angleDegrees()
+                                        val newRotation = normalizeAngle(pointerAngle - baseAngle)
+                                        val clampedCenter = clampCenterInsideContainer(
+                                            candidate = current.center,
+                                            container = containerSize,
+                                            stickerSize = current.size,
+                                            scale = current.scale,
+                                            rotation = newRotation
+                                        )
+                                        current.copy(rotation = newRotation, center = clampedCenter)
+                                    }
+                                }
+                            }
                         },
-                        onRemove = { isStickerVisible = false }
+                        onRemove = {
+                            val index = stickers.indexOfFirst { it.id == sticker.id }
+                            if (index != -1) {
+                                stickers.removeAt(index)
+                                if (selectedStickerId == sticker.id) {
+                                    selectedStickerId = stickers.lastOrNull()?.id
+                                }
+                            }
+                        },
+                        onSizeChanged = { newSize ->
+                            updateSticker(sticker.id) { current ->
+                                if (current.size == newSize) {
+                                    current
+                                } else {
+                                    val clampedCenter = if (containerSize == IntSize.Zero || newSize == IntSize.Zero) {
+                                        current.center
+                                    } else {
+                                        clampCenterInsideContainer(
+                                            candidate = current.center,
+                                            container = containerSize,
+                                            stickerSize = newSize,
+                                            scale = current.scale,
+                                            rotation = current.rotation
+                                        )
+                                    }
+                                    current.copy(size = newSize, center = clampedCenter)
+                                }
+                            }
+                        }
                     )
                 }
             }
@@ -205,77 +290,101 @@ private fun StickerEditorScreen() {
     }
 }
 
-private const val MIN_SCALE = 0.4f
-private const val MAX_SCALE = 4f
-
 @Composable
 private fun Sticker(
-    modifier: Modifier,
-    text: String,
+    state: StickerState,
+    isSelected: Boolean,
+    onSelected: () -> Unit,
     onDrag: (localDelta: Offset) -> Unit,
     onScaleHandleDrag: (localPointer: Offset) -> Unit,
     onRotateHandleDrag: (localPointer: Offset) -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onSizeChanged: (IntSize) -> Unit
 ) {
     val handleBackground = Color(0xFF2A2A2A)
-    Box(modifier = modifier) {
+    val baseModifier = Modifier
+        .pointerInput(Unit) {
+            detectTapGestures(onTap = { onSelected() })
+        }
+        .pointerInput(isSelected) {
+            detectDragGestures(
+                onDragStart = { onSelected() }
+            ) { change, dragAmount ->
+                change.consume()
+                onDrag(dragAmount)
+            }
+        }
+
+    Box(
+        modifier = Modifier
+            .onGloballyPositioned { coordinates ->
+                onSizeChanged(coordinates.size)
+            }
+            .graphicsLayer {
+                val stickerSize = state.size
+                val width = stickerSize.width
+                val height = stickerSize.height
+                translationX = state.center.x - width / 2f
+                translationY = state.center.y - height / 2f
+                scaleX = state.scale
+                scaleY = state.scale
+                rotationZ = state.rotation
+                transformOrigin = TransformOrigin(0.5f, 0.5f)
+            }
+    ) {
         Box(
-            modifier = Modifier
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        onDrag(dragAmount)
-                    }
-                }
+            modifier = baseModifier
                 .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xAA000000))
+                .background(if (isSelected) Color(0xCC000000) else Color(0x88000000))
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Text(
-                text = text,
+                text = state.text,
                 color = Color.White,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
             )
         }
 
-        IconButton(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = CONTROL_BUTTON_OFFSET, y = -CONTROL_BUTTON_OFFSET)
-                .size(CONTROL_BUTTON_SIZE),
-            onClick = onRemove,
-            colors = IconButtonDefaults.iconButtonColors(containerColor = handleBackground)
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Close,
-                contentDescription = "移除贴纸",
-                tint = Color.White
+        if (isSelected) {
+            IconButton(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = CONTROL_BUTTON_OFFSET, y = -CONTROL_BUTTON_OFFSET)
+                    .size(CONTROL_BUTTON_SIZE),
+                onClick = onRemove,
+                colors = IconButtonDefaults.iconButtonColors(containerColor = handleBackground)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "移除贴纸",
+                    tint = Color.White
+                )
+            }
+
+            ControlHandle(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = -CONTROL_BUTTON_OFFSET, y = CONTROL_BUTTON_OFFSET),
+                icon = Icons.Filled.OpenInFull,
+                contentDescription = "缩放贴纸",
+                backgroundColor = handleBackground,
+                onDrag = onScaleHandleDrag
+            )
+
+            ControlHandle(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .offset(x = CONTROL_BUTTON_OFFSET, y = CONTROL_BUTTON_OFFSET),
+                icon = Icons.Filled.RotateRight,
+                contentDescription = "旋转贴纸",
+                backgroundColor = handleBackground,
+                onDrag = onRotateHandleDrag
             )
         }
-
-        ControlHandle(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .offset(x = -CONTROL_BUTTON_OFFSET, y = CONTROL_BUTTON_OFFSET),
-            icon = Icons.Filled.OpenInFull,
-            contentDescription = "缩放贴纸",
-            backgroundColor = handleBackground,
-            onDrag = onScaleHandleDrag
-        )
-
-        ControlHandle(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .offset(x = CONTROL_BUTTON_OFFSET, y = CONTROL_BUTTON_OFFSET),
-            icon = Icons.Filled.RotateRight,
-            contentDescription = "旋转贴纸",
-            backgroundColor = handleBackground,
-            onDrag = onRotateHandleDrag
-        )
     }
 }
-
+ 
 @Composable
 private fun ControlHandle(
     modifier: Modifier,
@@ -312,6 +421,15 @@ private fun ControlHandle(
 
 private val CONTROL_BUTTON_SIZE = 32.dp
 private val CONTROL_BUTTON_OFFSET = CONTROL_BUTTON_SIZE / 2
+
+private data class StickerState(
+    val id: Long,
+    val text: String,
+    val center: Offset,
+    val scale: Float = 1f,
+    val rotation: Float = 0f,
+    val size: IntSize = IntSize.Zero
+)
 
 private fun clampCenterInsideContainer(
     candidate: Offset,

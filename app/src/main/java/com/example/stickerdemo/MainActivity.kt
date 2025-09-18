@@ -1,6 +1,16 @@
 package com.example.stickerdemo
 
+import android.content.ContentValues
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.view.View
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
@@ -22,6 +32,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.RotateRight
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Card
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -34,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,19 +58,32 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.core.view.drawToBitmap
 import com.example.stickerdemo.ui.theme.StickerImageEditorTheme
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.sin
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,9 +101,14 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun StickerEditorScreen() {
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
+    var containerCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val stickers = remember { mutableStateListOf<StickerState>() }
     var selectedStickerId by remember { mutableStateOf<Long?>(null) }
     var nextStickerIndex by remember { mutableStateOf(1) }
+    val context = LocalContext.current
+    val view = LocalView.current
+    val coroutineScope = rememberCoroutineScope()
+    var isSaving by remember { mutableStateOf(false) }
 
     LaunchedEffect(containerSize) {
         if (containerSize == IntSize.Zero) return@LaunchedEffect
@@ -188,7 +218,10 @@ private fun StickerEditorScreen() {
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1.6f)
-                .onGloballyPositioned { containerSize = it.size },
+                .onGloballyPositioned {
+                    containerSize = it.size
+                    containerCoordinates = it
+                },
             shape = RoundedCornerShape(16.dp)
         ) {
             Box(modifier = Modifier.background(Color(0xFF101010))) {
@@ -238,6 +271,36 @@ private fun StickerEditorScreen() {
                 .padding(bottom = 24.dp)
         ) {
             Icon(imageVector = Icons.Filled.Add, contentDescription = "添加贴纸")
+        }
+
+        FloatingActionButton(
+            onClick = {
+                if (containerSize == IntSize.Zero) {
+                    Toast.makeText(context, "画布尚未准备好", Toast.LENGTH_SHORT).show()
+                    return@FloatingActionButton
+                }
+                val coordinates = containerCoordinates
+                if (coordinates == null) {
+                    Toast.makeText(context, "画布尚未准备好", Toast.LENGTH_SHORT).show()
+                    return@FloatingActionButton
+                }
+                if (isSaving) return@FloatingActionButton
+                coroutineScope.launch {
+                    isSaving = true
+                    val result = saveStickerComposition(context, view, coordinates)
+                    Toast.makeText(
+                        context,
+                        result.message,
+                        if (result.success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                    ).show()
+                    isSaving = false
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 24.dp, bottom = 24.dp)
+        ) {
+            Icon(imageVector = Icons.Filled.Save, contentDescription = "保存贴纸")
         }
     }
 }
@@ -499,6 +562,87 @@ private fun RotateHandle(
             tint = Color.Black,
             modifier = Modifier.size(18.dp)
         )
+    }
+}
+
+private data class SaveResult(val success: Boolean, val message: String)
+
+private suspend fun saveStickerComposition(
+    context: Context,
+    view: View,
+    coordinates: LayoutCoordinates
+): SaveResult {
+    return try {
+        val bitmap = captureStickerBitmap(view, coordinates) ?: return SaveResult(false, "保存失败")
+        val uri = withContext(Dispatchers.IO) { persistBitmap(context, bitmap) }
+        if (uri != null) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                context.sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, uri))
+            }
+            val message = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                "贴纸已保存到相册"
+            } else {
+                "贴纸已保存到: ${uri.path}"
+            }
+            SaveResult(true, message)
+        } else {
+            SaveResult(false, "保存失败")
+        }
+    } catch (error: Exception) {
+        SaveResult(false, "保存失败")
+    }
+}
+
+private suspend fun captureStickerBitmap(view: View, coordinates: LayoutCoordinates): Bitmap? =
+    withContext(Dispatchers.Main) {
+        val fullBitmap = view.drawToBitmap(Bitmap.Config.ARGB_8888)
+        val bounds = coordinates.boundsInRoot()
+        val left = floor(bounds.left).toInt().coerceAtLeast(0)
+        val top = floor(bounds.top).toInt().coerceAtLeast(0)
+        val right = ceil(bounds.right).toInt().coerceAtMost(fullBitmap.width)
+        val bottom = ceil(bounds.bottom).toInt().coerceAtMost(fullBitmap.height)
+        val width = (right - left).coerceAtLeast(0)
+        val height = (bottom - top).coerceAtLeast(0)
+        if (width == 0 || height == 0) {
+            return@withContext null
+        }
+        Bitmap.createBitmap(fullBitmap, left, top, width, height)
+    }
+
+private fun persistBitmap(context: Context, bitmap: Bitmap): Uri? {
+    val fileName = "sticker_${System.currentTimeMillis()}.png"
+    return try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = context.contentResolver
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/StickerEditor")
+            }
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            if (uri != null) {
+                resolver.openOutputStream(uri)?.use { stream ->
+                    if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                        return null
+                    }
+                } ?: return null
+            }
+            uri
+        } else {
+            val directory = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: return null
+            if (!directory.exists() && !directory.mkdirs()) {
+                return null
+            }
+            val file = File(directory, fileName)
+            FileOutputStream(file).use { stream ->
+                if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                    return null
+                }
+            }
+            Uri.fromFile(file)
+        }
+    } catch (error: IOException) {
+        null
     }
 }
 

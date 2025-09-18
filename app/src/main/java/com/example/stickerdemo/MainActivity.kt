@@ -92,12 +92,17 @@ import kotlin.math.sin
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+// 主界面 Activity，负责承载 Compose 内容
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 使用 Compose 设置界面内容
         setContent {
+            // 应用自定义主题
             StickerImageEditorTheme {
+                // 使用 Surface 作为界面容器
                 Surface(color = MaterialTheme.colorScheme.background) {
+                    // 展示贴纸编辑页面
                     StickerEditorScreen()
                 }
             }
@@ -105,11 +110,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// 贴纸编辑界面主体，负责展示图片与交互逻辑
 @Composable
 private fun StickerEditorScreen() {
+    // 当前上下文对象
     val context = LocalContext.current
+    // 当前屏幕密度，用于像素与 dp/sp 转换
     val density = LocalDensity.current
+    // 协程作用域，用于执行异步保存操作
     val scope = rememberCoroutineScope()
+    // 读取示例图片，作为底图
     val baseBitmap = remember(context) {
         BitmapFactory.decodeResource(
             context.resources,
@@ -117,16 +127,24 @@ private fun StickerEditorScreen() {
             BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
         ) ?: throw IllegalStateException("无法加载示例图片")
     }
+    // 将 Bitmap 转换为 Compose 可用的 ImageBitmap
     val baseImage = remember(baseBitmap) { baseBitmap.asImageBitmap() }
+    // 计算底图宽高比，确保显示比例正确
     val baseAspectRatio = remember(baseBitmap) {
         if (baseBitmap.height == 0) 1.6f else baseBitmap.width.toFloat() / baseBitmap.height.toFloat()
     }
+    // 贴纸容器的实际尺寸
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
+    // 保存当前所有贴纸状态
     val stickers = remember { mutableStateListOf<StickerState>() }
+    // 当前选中的贴纸 ID
     var selectedStickerId by remember { mutableStateOf<Long?>(null) }
+    // 生成新贴纸的自增 ID
     var nextStickerId by remember { mutableStateOf(0L) }
+    // 标记是否正在保存图片
     var isSaving by remember { mutableStateOf(false) }
 
+    // 添加新贴纸到列表中
     fun addSticker(text: String) {
         if (containerSize == IntSize.Zero) return
         val id = nextStickerId
@@ -144,6 +162,7 @@ private fun StickerEditorScreen() {
         selectedStickerId = id
     }
 
+    // 根据 ID 更新贴纸数据
     fun updateSticker(id: Long, transform: (StickerState) -> StickerState) {
         val index = stickers.indexOfFirst { it.id == id }
         if (index != -1) {
@@ -155,6 +174,7 @@ private fun StickerEditorScreen() {
         }
     }
 
+    // 容器尺寸准备好后自动添加默认贴纸
     LaunchedEffect(containerSize) {
         if (containerSize != IntSize.Zero && stickers.isEmpty()) {
             addSticker("可拖拽/缩放/旋转的贴纸")
@@ -167,28 +187,33 @@ private fun StickerEditorScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // 顶部功能按钮区域
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // 添加默认文案的贴纸
             ElevatedButton(
                 onClick = { addSticker("可拖拽/缩放/旋转的贴纸") },
                 enabled = containerSize != IntSize.Zero
             ) {
                 Text(text = "添加文字贴纸")
             }
+            // 添加带序号的新贴纸
             ElevatedButton(
                 onClick = { addSticker("新的贴纸 ${stickers.size + 1}") },
                 enabled = containerSize != IntSize.Zero
             ) {
                 Text(text = "添加新贴纸")
             }
+            // 保存合成后图片
             ElevatedButton(
                 onClick = {
                     scope.launch {
                         if (containerSize == IntSize.Zero || stickers.isEmpty()) return@launch
                         isSaving = true
                         try {
+                            // 在 IO 线程执行图片保存
                             val savedUri = withContext(Dispatchers.IO) {
                                 saveEditedImage(
                                     context = context,
@@ -228,6 +253,7 @@ private fun StickerEditorScreen() {
             shape = RoundedCornerShape(16.dp)
         ) {
             Box(modifier = Modifier.background(Color(0xFF101010))) {
+                // 显示底图
                 Image(
                     bitmap = baseImage,
                     contentDescription = null,
@@ -235,6 +261,7 @@ private fun StickerEditorScreen() {
                     modifier = Modifier.fillMaxSize()
                 )
 
+                // 遍历绘制所有贴纸
                 stickers.forEach { sticker ->
                     val isSelected = sticker.id == selectedStickerId
                     Sticker(
@@ -245,8 +272,10 @@ private fun StickerEditorScreen() {
                             if (containerSize == IntSize.Zero) return@Sticker
                             updateSticker(sticker.id) { current ->
                                 if (current.size == IntSize.Zero) current else {
+                                    // 将本地点增量转换为旋转后的全局坐标增量
                                     val deltaGlobal = localDelta.rotate(current.rotation) * current.scale
                                     val candidateCenter = current.center + deltaGlobal
+                                    // 贴纸移动后需要限制在容器边界内
                                     val clamped = clampCenterInsideContainer(
                                         candidate = candidateCenter,
                                         container = containerSize,
@@ -262,6 +291,7 @@ private fun StickerEditorScreen() {
                             if (containerSize == IntSize.Zero) return@Sticker
                             updateSticker(sticker.id) { current ->
                                 if (current.size == IntSize.Zero) current else {
+                                    // 将控制手柄坐标转换为容器坐标系
                                     val pointerInContainer = localToContainer(
                                         local = localPointer,
                                         center = current.center,
@@ -273,25 +303,27 @@ private fun StickerEditorScreen() {
                                         x = -current.size.width / 2f,
                                         y = current.size.height / 2f
                                     )
-                                    val baseLength = baseVector.length()
-                                    if (baseLength == 0f) {
-                                        current
-                                    } else {
-                                        val desiredVector = pointerInContainer - current.center
-                                        val tentativeScale = if (desiredVector == Offset.Zero) {
-                                            current.scale
+                                        val baseLength = baseVector.length()
+                                        if (baseLength == 0f) {
+                                            current
                                         } else {
-                                            desiredVector.length() / baseLength
-                                        }
-                                        val targetScale = tentativeScale.coerceIn(MIN_SCALE, MAX_SCALE)
-                                        val rotatedBase = baseVector.rotate(current.rotation)
-                                        val desiredScaledVector = rotatedBase * targetScale
-                                        val candidateCenter = pointerInContainer - desiredScaledVector
-                                        val clampedCenter = clampCenterInsideContainer(
-                                            candidate = candidateCenter,
-                                            container = containerSize,
-                                            stickerSize = current.size,
-                                            scale = targetScale,
+                                            val desiredVector = pointerInContainer - current.center
+                                            val tentativeScale = if (desiredVector == Offset.Zero) {
+                                                current.scale
+                                            } else {
+                                                // 根据指针距离计算目标缩放值
+                                                desiredVector.length() / baseLength
+                                            }
+                                            val targetScale = tentativeScale.coerceIn(MIN_SCALE, MAX_SCALE)
+                                            val rotatedBase = baseVector.rotate(current.rotation)
+                                            val desiredScaledVector = rotatedBase * targetScale
+                                            val candidateCenter = pointerInContainer - desiredScaledVector
+                                            // 缩放后重新校正中心位置
+                                            val clampedCenter = clampCenterInsideContainer(
+                                                candidate = candidateCenter,
+                                                container = containerSize,
+                                                stickerSize = current.size,
+                                                scale = targetScale,
                                             rotation = current.rotation
                                         )
                                         current.copy(center = clampedCenter, scale = targetScale)
@@ -303,6 +335,7 @@ private fun StickerEditorScreen() {
                             if (containerSize == IntSize.Zero) return@Sticker
                             updateSticker(sticker.id) { current ->
                                 if (current.size == IntSize.Zero) current else {
+                                    // 计算控制手柄在容器中的位置
                                     val pointerInContainer = localToContainer(
                                         local = localPointer,
                                         center = current.center,
@@ -320,6 +353,7 @@ private fun StickerEditorScreen() {
                                         )
                                         val baseAngle = baseVector.angleDegrees()
                                         val pointerAngle = pointerVector.angleDegrees()
+                                        // 角度差转换为新的贴纸旋转角度
                                         val newRotation = normalizeAngle(pointerAngle - baseAngle)
                                         val clampedCenter = clampCenterInsideContainer(
                                             candidate = current.center,
@@ -338,6 +372,7 @@ private fun StickerEditorScreen() {
                             if (index != -1) {
                                 stickers.removeAt(index)
                                 if (selectedStickerId == sticker.id) {
+                                    // 如果删除的是当前选中项，则选中剩余的最后一项
                                     selectedStickerId = stickers.lastOrNull()?.id
                                 }
                             }
@@ -350,6 +385,7 @@ private fun StickerEditorScreen() {
                                     val clampedCenter = if (containerSize == IntSize.Zero || newSize == IntSize.Zero) {
                                         current.center
                                     } else {
+                                        // 尺寸变化后需要重新计算中心点
                                         clampCenterInsideContainer(
                                             candidate = current.center,
                                             container = containerSize,
@@ -369,6 +405,7 @@ private fun StickerEditorScreen() {
     }
 }
 
+// 将贴纸合成到底图后保存到媒体库
 private suspend fun saveEditedImage(
     context: Context,
     baseBitmap: Bitmap,
@@ -376,9 +413,11 @@ private suspend fun saveEditedImage(
     containerSize: IntSize,
     density: Density
 ): Uri {
+    // 容器尺寸不可用时无法继续
     if (containerSize == IntSize.Zero) {
         throw IllegalStateException("容器尺寸不可用")
     }
+    // 创建底图的可编辑副本
     val mutableBitmap = baseBitmap.copy(Bitmap.Config.ARGB_8888, true)
         ?: throw IllegalStateException("无法创建原图副本")
     if (mutableBitmap.width == 0 || mutableBitmap.height == 0) {
@@ -386,6 +425,7 @@ private suspend fun saveEditedImage(
         throw IllegalStateException("原图尺寸无效")
     }
 
+    // 在副本上进行绘制
     val canvas = Canvas(mutableBitmap)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     val scaleX = mutableBitmap.width / containerSize.width.toFloat()
@@ -393,20 +433,25 @@ private suspend fun saveEditedImage(
 
     stickers.forEach { sticker ->
         if (sticker.size == IntSize.Zero) return@forEach
+        // 将贴纸渲染成位图
         val stickerBitmap = renderStickerBitmap(sticker, density)
         val matrix = Matrix().apply {
+            // 构建贴纸变换矩阵
             postTranslate(-stickerBitmap.width / 2f, -stickerBitmap.height / 2f)
             postScale(sticker.scale * scaleX, sticker.scale * scaleY)
             postRotate(sticker.rotation)
             postTranslate(sticker.center.x * scaleX, sticker.center.y * scaleY)
         }
+        // 将贴纸绘制到底图上
         canvas.drawBitmap(stickerBitmap, matrix, paint)
         stickerBitmap.recycle()
     }
 
+    // 保存图片到系统媒体库
     return saveBitmapToGallery(context, mutableBitmap)
 }
 
+// 生成单个贴纸的位图，用于保存到图片中
 private fun renderStickerBitmap(sticker: StickerState, density: Density): Bitmap {
     val width = max(sticker.size.width, 1)
     val height = max(sticker.size.height, 1)
@@ -442,6 +487,7 @@ private fun renderStickerBitmap(sticker: StickerState, density: Density): Bitmap
     return bitmap
 }
 
+// 将位图写入系统相册
 private fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri {
     val resolver = context.contentResolver
     val filename = "Sticker_${System.currentTimeMillis()}.png"
@@ -464,6 +510,7 @@ private fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri {
 
     var uri: Uri? = null
     try {
+        // 插入媒体库记录并写入图片数据
         uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
             ?: throw IllegalStateException("无法创建媒体库记录")
         resolver.openOutputStream(uri)?.use { output ->
@@ -474,6 +521,7 @@ private fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri {
         return uri
     } catch (error: Exception) {
         if (uri != null) {
+            // 如果发生异常则删除已插入的记录
             resolver.delete(uri, null, null)
         }
         throw error
@@ -484,9 +532,12 @@ private fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri {
     }
 }
 
+// 贴纸允许的最小缩放比例
 private const val MIN_SCALE = 0.4f
+// 贴纸允许的最大缩放比例
 private const val MAX_SCALE = 4f
 
+// 单个贴纸组件，负责展示文字与控制手柄
 @Composable
 private fun Sticker(
     state: StickerState,
@@ -498,7 +549,9 @@ private fun Sticker(
     onRemove: () -> Unit,
     onSizeChanged: (IntSize) -> Unit
 ) {
+    // 控制手柄的底色
     val handleBackground = Color(0xFF2A2A2A)
+    // 基础手势逻辑：点击选中、拖动移动
     val baseModifier = Modifier
         .pointerInput(Unit) {
             detectTapGestures(onTap = { onSelected() })
@@ -515,12 +568,14 @@ private fun Sticker(
     Box(
         modifier = Modifier
             .onGloballyPositioned { coordinates ->
+                // 记录组件真实尺寸供后续计算
                 onSizeChanged(coordinates.size)
             }
             .graphicsLayer {
                 val stickerSize = state.size
                 val width = stickerSize.width
                 val height = stickerSize.height
+                // 根据状态配置平移、缩放与旋转
                 translationX = state.center.x - width / 2f
                 translationY = state.center.y - height / 2f
                 scaleX = state.scale
@@ -535,6 +590,7 @@ private fun Sticker(
                 .background(if (isSelected) Color(0xCC000000) else Color(0x88000000))
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
+            // 显示贴纸文本内容
             Text(
                 text = state.text,
                 color = Color.White,
@@ -544,6 +600,7 @@ private fun Sticker(
         }
 
         if (isSelected) {
+            // 删除按钮位于右上角
             IconButton(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -559,6 +616,7 @@ private fun Sticker(
                 )
             }
 
+            // 缩放手柄位于左下角
             ControlHandle(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -569,6 +627,7 @@ private fun Sticker(
                 onDrag = onScaleHandleDrag
             )
 
+            // 旋转手柄位于右下角
             ControlHandle(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -582,6 +641,7 @@ private fun Sticker(
     }
 }
  
+// 贴纸控制手柄组件，处理缩放与旋转的拖动事件
 @Composable
 private fun ControlHandle(
     modifier: Modifier,
@@ -590,16 +650,19 @@ private fun ControlHandle(
     backgroundColor: Color,
     onDrag: (localPointer: Offset) -> Unit
 ) {
+    // 记录手柄在父布局中的原点位置
     var originInParent by remember { mutableStateOf(Offset.Zero) }
     Box(
         modifier = modifier
             .size(CONTROL_BUTTON_SIZE)
             .onGloballyPositioned { coordinates ->
+                // 获取手柄相对于父布局的坐标
                 originInParent = coordinates.positionInParent()
             }
             .clip(CircleShape)
             .background(backgroundColor)
             .pointerInput(Unit) {
+                // 将拖动位置转换为局部坐标回传
                 detectDragGestures { change, _ ->
                     change.consume()
                     onDrag(originInParent + change.position)
@@ -607,6 +670,7 @@ private fun ControlHandle(
             },
         contentAlignment = Alignment.Center
     ) {
+        // 绘制手柄图标
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
@@ -616,9 +680,12 @@ private fun ControlHandle(
     }
 }
 
+// 控制手柄的尺寸
 private val CONTROL_BUTTON_SIZE = 32.dp
+// 控制手柄偏移量，用于将图标移动到角落
 private val CONTROL_BUTTON_OFFSET = CONTROL_BUTTON_SIZE / 2
 
+// 贴纸的状态数据，包含位置、缩放、旋转等信息
 private data class StickerState(
     val id: Long,
     val text: String,
@@ -628,6 +695,7 @@ private data class StickerState(
     val size: IntSize = IntSize.Zero
 )
 
+// 将贴纸中心点限制在容器范围内
 private fun clampCenterInsideContainer(
     candidate: Offset,
     container: IntSize,
@@ -650,6 +718,7 @@ private fun clampCenterInsideContainer(
     return Offset(clampedX, clampedY)
 }
 
+// 计算贴纸旋转后的轴对齐包围盒半径
 private fun calculateAabbHalfExtents(
     stickerSize: IntSize,
     scale: Float,
@@ -671,12 +740,14 @@ private fun calculateAabbHalfExtents(
     return Offset(halfAabbWidth, halfAabbHeight)
 }
 
+// 将角度归一化到 0~360 范围
 private fun normalizeAngle(angle: Float): Float {
     var normalized = angle % 360f
     if (normalized < 0f) normalized += 360f
     return normalized
 }
 
+// 将贴纸局部坐标转换为容器坐标
 private fun localToContainer(
     local: Offset,
     center: Offset,
@@ -694,6 +765,7 @@ private fun localToContainer(
     return center + scaled
 }
 
+// 对偏移量执行二维旋转
 private fun Offset.rotate(angle: Float): Offset {
     if (angle == 0f) return this
     val radians = angle.toRadians()
@@ -705,10 +777,14 @@ private fun Offset.rotate(angle: Float): Offset {
     )
 }
 
+// 偏移量与标量相乘得到新的偏移量
 private operator fun Offset.times(value: Float): Offset = Offset(x * value, y * value)
 
+// 将角度转换为弧度
 private fun Float.toRadians(): Float = (this / 180f) * PI.toFloat()
 
+// 计算偏移量向量的长度
 private fun Offset.length(): Float = hypot(x, y)
 
+// 计算偏移量与 X 轴的夹角（角度制）
 private fun Offset.angleDegrees(): Float = Math.toDegrees(atan2(y.toDouble(), x.toDouble())).toFloat()

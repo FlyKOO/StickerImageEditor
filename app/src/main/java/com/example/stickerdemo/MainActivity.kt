@@ -290,6 +290,9 @@ private fun StickerEditorScreen() {
     }
 }
 
+private const val MIN_SCALE = 0.4f
+private const val MAX_SCALE = 4f
+
 @Composable
 private fun Sticker(
     state: StickerState,

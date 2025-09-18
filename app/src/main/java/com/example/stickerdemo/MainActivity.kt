@@ -1,6 +1,23 @@
 package com.example.stickerdemo
 
+import android.content.ContentValues
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Typeface
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
@@ -37,6 +54,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,18 +68,29 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.stickerdemo.R
 import com.example.stickerdemo.ui.theme.StickerImageEditorTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,10 +107,25 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun StickerEditorScreen() {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val baseBitmap = remember(context) {
+        BitmapFactory.decodeResource(
+            context.resources,
+            R.drawable.sample_photo,
+            BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+        ) ?: throw IllegalStateException("无法加载示例图片")
+    }
+    val baseImage = remember(baseBitmap) { baseBitmap.asImageBitmap() }
+    val baseAspectRatio = remember(baseBitmap) {
+        if (baseBitmap.height == 0) 1.6f else baseBitmap.width.toFloat() / baseBitmap.height.toFloat()
+    }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     val stickers = remember { mutableStateListOf<StickerState>() }
     var selectedStickerId by remember { mutableStateOf<Long?>(null) }
     var nextStickerId by remember { mutableStateOf(0L) }
+    var isSaving by remember { mutableStateOf(false) }
 
     fun addSticker(text: String) {
         if (containerSize == IntSize.Zero) return
@@ -139,20 +183,55 @@ private fun StickerEditorScreen() {
             ) {
                 Text(text = "添加新贴纸")
             }
+            ElevatedButton(
+                onClick = {
+                    scope.launch {
+                        if (containerSize == IntSize.Zero || stickers.isEmpty()) return@launch
+                        isSaving = true
+                        try {
+                            val savedUri = withContext(Dispatchers.IO) {
+                                saveEditedImage(
+                                    context = context,
+                                    baseBitmap = baseBitmap,
+                                    stickers = stickers.map { it.copy() },
+                                    containerSize = containerSize,
+                                    density = density
+                                )
+                            }
+                            Toast.makeText(
+                                context,
+                                "图片已保存：${savedUri.lastPathSegment ?: ""}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        } catch (error: Exception) {
+                            Toast.makeText(
+                                context,
+                                "保存失败: ${error.localizedMessage ?: error.javaClass.simpleName}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        } finally {
+                            isSaving = false
+                        }
+                    }
+                },
+                enabled = !isSaving && containerSize != IntSize.Zero && stickers.isNotEmpty()
+            ) {
+                Text(text = if (isSaving) "保存中..." else "保存图片")
+            }
         }
 
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(1.6f)
+                .aspectRatio(baseAspectRatio)
                 .onGloballyPositioned { containerSize = it.size },
             shape = RoundedCornerShape(16.dp)
         ) {
             Box(modifier = Modifier.background(Color(0xFF101010))) {
                 Image(
-                    painter = painterResource(id = android.R.drawable.ic_menu_gallery),
+                    bitmap = baseImage,
                     contentDescription = null,
-                    contentScale = ContentScale.Crop,
+                    contentScale = ContentScale.FillBounds,
                     modifier = Modifier.fillMaxSize()
                 )
 
@@ -286,6 +365,121 @@ private fun StickerEditorScreen() {
                     )
                 }
             }
+        }
+    }
+}
+
+private suspend fun saveEditedImage(
+    context: Context,
+    baseBitmap: Bitmap,
+    stickers: List<StickerState>,
+    containerSize: IntSize,
+    density: Density
+): Uri {
+    if (containerSize == IntSize.Zero) {
+        throw IllegalStateException("容器尺寸不可用")
+    }
+    val mutableBitmap = baseBitmap.copy(Bitmap.Config.ARGB_8888, true)
+        ?: throw IllegalStateException("无法创建原图副本")
+    if (mutableBitmap.width == 0 || mutableBitmap.height == 0) {
+        mutableBitmap.recycle()
+        throw IllegalStateException("原图尺寸无效")
+    }
+
+    val canvas = Canvas(mutableBitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    val scaleX = mutableBitmap.width / containerSize.width.toFloat()
+    val scaleY = mutableBitmap.height / containerSize.height.toFloat()
+
+    stickers.forEach { sticker ->
+        if (sticker.size == IntSize.Zero) return@forEach
+        val stickerBitmap = renderStickerBitmap(sticker, density)
+        val matrix = Matrix().apply {
+            postTranslate(-stickerBitmap.width / 2f, -stickerBitmap.height / 2f)
+            postScale(sticker.scale * scaleX, sticker.scale * scaleY)
+            postRotate(sticker.rotation)
+            postTranslate(sticker.center.x * scaleX, sticker.center.y * scaleY)
+        }
+        canvas.drawBitmap(stickerBitmap, matrix, paint)
+        stickerBitmap.recycle()
+    }
+
+    return saveBitmapToGallery(context, mutableBitmap)
+}
+
+private fun renderStickerBitmap(sticker: StickerState, density: Density): Bitmap {
+    val width = max(sticker.size.width, 1)
+    val height = max(sticker.size.height, 1)
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+
+    val cornerRadius = with(density) { 12.dp.toPx() }
+    val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color(0x88000000).toArgb()
+    }
+    canvas.drawRoundRect(RectF(0f, 0f, width.toFloat(), height.toFloat()), cornerRadius, cornerRadius, backgroundPaint)
+
+    val horizontalPadding = with(density) { 16.dp.toPx() }
+    val verticalPadding = with(density) { 12.dp.toPx() }
+    val textWidth = max(1f, width - horizontalPadding * 2).roundToInt()
+    val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.White.toArgb()
+        textSize = with(density) { 18.sp.toPx() }
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+
+    val layout = StaticLayout.Builder
+        .obtain(sticker.text, 0, sticker.text.length, textPaint, textWidth)
+        .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+        .setIncludePad(false)
+        .build()
+
+    canvas.save()
+    canvas.translate(horizontalPadding, verticalPadding)
+    layout.draw(canvas)
+    canvas.restore()
+
+    return bitmap
+}
+
+private fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri {
+    val resolver = context.contentResolver
+    val filename = "Sticker_${System.currentTimeMillis()}.png"
+    val contentValues = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/StickerImageEditor")
+        } else {
+            @Suppress("DEPRECATION")
+            val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+            val targetDir = File(picturesDir, "StickerImageEditor")
+            if (!targetDir.exists()) {
+                targetDir.mkdirs()
+            }
+            @Suppress("DEPRECATION")
+            put(MediaStore.Images.Media.DATA, File(targetDir, filename).absolutePath)
+        }
+    }
+
+    var uri: Uri? = null
+    try {
+        uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            ?: throw IllegalStateException("无法创建媒体库记录")
+        resolver.openOutputStream(uri)?.use { output ->
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                throw IllegalStateException("图片压缩失败")
+            }
+        } ?: throw IllegalStateException("无法写入图片数据")
+        return uri
+    } catch (error: Exception) {
+        if (uri != null) {
+            resolver.delete(uri, null, null)
+        }
+        throw error
+    } finally {
+        if (!bitmap.isRecycled) {
+            bitmap.recycle()
         }
     }
 }
